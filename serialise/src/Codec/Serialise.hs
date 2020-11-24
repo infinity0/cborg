@@ -24,6 +24,7 @@ module Codec.Serialise
     serialise
   , deserialise
   , deserialiseOrFail
+  , deserialiseFullyOrFail
 
     -- * Deserialisation exceptions
   , CBOR.Read.DeserialiseFailure(..)
@@ -115,6 +116,10 @@ serialise = CBOR.Write.toLazyByteString . encode
 -- representation is invalid or does not correspond to a value of the
 -- expected type.
 --
+-- The representation may have leftover content that is ignored by this
+-- function; use 'deserialiseFullyOrFail' if you need to check that this is
+-- not the case.
+--
 -- @since 0.2.0.0
 deserialise :: Serialise a => BS.ByteString -> a
 deserialise bs0 =
@@ -130,6 +135,10 @@ deserialise bs0 =
 -- | Deserialise a Haskell value from the external binary representation,
 -- or get back a @'DeserialiseFailure'@.
 --
+-- The representation may have leftover content that is ignored by this
+-- function; use 'deserialiseFullyOrFail' if you need to check that this is
+-- not the case.
+--
 -- @since 0.2.0.0
 deserialiseOrFail :: Serialise a => BS.ByteString -> Either CBOR.Read.DeserialiseFailure a
 deserialiseOrFail bs0 =
@@ -141,6 +150,27 @@ deserialiseOrFail bs0 =
         BS.Chunk chunk bs' -> k (Just chunk) >>= supplyAllInput bs'
         BS.Empty           -> k Nothing      >>= supplyAllInput BS.Empty
     supplyAllInput _ (CBOR.Read.Fail _ _ exn) = return (Left exn)
+
+-- | Deserialise a Haskell value from the external binary representation,
+-- checking that the representation has been consumed fully with no leftovers,
+-- or get back a @'Either' 'DeserialiseFailure' 'ByteString'@.
+--
+-- @since 0.2.4.0
+deserialiseFullyOrFail :: Serialise a => BS.ByteString -> Either (Either CBOR.Read.DeserialiseFailure BS.ByteString) a
+deserialiseFullyOrFail bs0 =
+    runST (supplyAllInput bs0 =<< deserialiseIncremental)
+  where
+    supplyAllInput _bs (CBOR.Read.Done r _ x) =
+      let r' = BS.fromStrict r in
+      if BS.null r'
+        then return (Right x)
+        else return (Left (Right r'))
+    supplyAllInput  bs (CBOR.Read.Partial k)  =
+      case bs of
+        BS.Chunk chunk bs' -> k (Just chunk) >>= supplyAllInput bs'
+        BS.Empty           -> k Nothing      >>= supplyAllInput BS.Empty
+    supplyAllInput _ (CBOR.Read.Fail _ _ exn) = return (Left (Left exn))
+
 
 --------------------------------------------------------------------------------
 -- File-based API
